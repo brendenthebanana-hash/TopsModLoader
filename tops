@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""tops: manager for the Tops mod loader (mcpelauncher / Flathub)."""
+import argparse, os, shutil, sys
+from pathlib import Path
+
+FLATPAK = Path.home() / ".var/app/io.mrarm.mcpelauncher/data/mcpelauncher"
+NATIVE = Path.home() / ".local/share/mcpelauncher"
+
+def data_dir():
+    env = os.environ.get("TOPS_DATA_DIR")
+    if env: return Path(env)
+    if FLATPAK.exists(): return FLATPAK
+    if NATIVE.exists(): return NATIVE
+    sys.exit("Could not find mcpelauncher data dir. Run the launcher once, or set TOPS_DATA_DIR.")
+
+def plugins(d):
+    p = d / "tops/plugins"; p.mkdir(parents=True, exist_ok=True); return p
+
+def cmd_setup(a):
+    d = data_dir()
+    core = Path(a.core).expanduser()
+    if not core.is_file(): sys.exit(f"tops-core not found at {core} (use --core)")
+    mods = d / "mods"; mods.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(core, mods / "libtops-core.so")
+    plugins(d)
+    print(f"Installed tops-core into {mods}\nPlugins dir: {plugins(d)}")
+    print("Flatpak install detected." if d == FLATPAK else "Native/custom install detected.")
+
+def cmd_install(a):
+    src = Path(a.plugin).expanduser()
+    if not src.is_file() or src.suffix != ".so": sys.exit("Give a path to a plugin .so file")
+    shutil.copy2(src, plugins(data_dir()) / src.name)
+    print(f"Installed {src.name}")
+
+def find(d, name):
+    base = name if name.endswith(".so") else name + ".so"
+    for suf in ("", ".disabled"):
+        for cand in (base, "lib" + base, "libtops-" + base):
+            p = plugins(d) / (cand + suf)
+            if p.exists(): return p
+    sys.exit(f"Plugin '{name}' not found")
+
+def cmd_remove(a): find(data_dir(), a.name).unlink(); print("Removed", a.name)
+
+def cmd_disable(a):
+    p = find(data_dir(), a.name)
+    if p.suffix == ".so": p.rename(p.with_name(p.name + ".disabled"))
+    print("Disabled", a.name)
+
+def cmd_enable(a):
+    p = find(data_dir(), a.name)
+    if p.suffix == ".disabled": p.rename(p.with_suffix(""))
+    print("Enabled", a.name)
+
+def cmd_list(a):
+    d = data_dir(); found = False
+    for p in sorted(plugins(d).iterdir()):
+        found = True
+        print(("[off] " if p.name.endswith(".disabled") else "[on]  ") + p.name.replace(".disabled", ""))
+    if not found: print("No plugins installed.")
+
+def cmd_status(a):
+    d = data_dir()
+    print("Data dir :", d, "(Flatpak)" if d == FLATPAK else "")
+    core = d / "mods/libtops-core.so"
+    print("tops-core:", "installed" if core.exists() else "MISSING (run: tops setup)")
+    vers = d / "versions"
+    if vers.exists(): print("Game versions:", ", ".join(sorted(x.name for x in vers.iterdir())) or "none")
+    cmd_list(a)
+
+def main():
+    ap = argparse.ArgumentParser(prog="tops")
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    s = sp.add_parser("setup"); s.add_argument("--core", default="libtops-core.so"); s.set_defaults(f=cmd_setup)
+    s = sp.add_parser("install"); s.add_argument("plugin"); s.set_defaults(f=cmd_install)
+    for n, f in (("remove", cmd_remove), ("enable", cmd_enable), ("disable", cmd_disable)):
+        s = sp.add_parser(n); s.add_argument("name"); s.set_defaults(f=f)
+    sp.add_parser("list").set_defaults(f=cmd_list)
+    sp.add_parser("status").set_defaults(f=cmd_status)
+    a = ap.parse_args(); a.f(a)
+
+if __name__ == "__main__": main()
